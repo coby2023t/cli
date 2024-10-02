@@ -12,6 +12,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/transifex/cli/internal/txlib/config"
 	"github.com/transifex/cli/pkg/jsonapi"
+	"golang.org/x/term"
 )
 
 func figureOutBranch(branch string) string {
@@ -123,7 +124,7 @@ func stringSliceContains(haystack []string, needle string) bool {
 	return false
 }
 
-func makeLocalToRemoteLanguageMappings(
+func makeRemoteToLocalLanguageMappings(
 	cfg config.Config, cfgResource config.Resource,
 ) map[string]string {
 	// In the configuration, the language mappings are "remote code -> local
@@ -132,32 +133,30 @@ func makeLocalToRemoteLanguageMappings(
 	// reverse the maps
 
 	result := make(map[string]string)
-	for key, value := range cfg.Local.LanguageMappings {
-		result[value] = key
+	for transifexLanguageCode, localLanguageCode := range cfg.Local.LanguageMappings {
+		result[transifexLanguageCode] = localLanguageCode
 	}
-	for key, value := range cfgResource.LanguageMappings {
+	for transifexLanguageCode, localLanguageCode := range cfgResource.LanguageMappings {
 		// Resource language mappings overwrite "global" language mappings
-		result[value] = key
+		result[transifexLanguageCode] = localLanguageCode
 	}
 	return result
 }
 
-func makeRemoteToLocalLanguageMappings(
-	localToRemoteLanguageMappings map[string]string,
-) map[string]string {
-	result := make(map[string]string)
-	for key, value := range localToRemoteLanguageMappings {
-		result[value] = key
+func reverseMap(src map[string]string) map[string]string {
+	dst := make(map[string]string)
+	for key, value := range src {
+		dst[value] = key
 	}
-	return result
+	return dst
 }
 
 /*
-Run 'do'. If the error returned by 'do' is a jsonapi.ThrottleError, sleep the number of
+Run 'do'. If the error returned by 'do' is a jsonapi.RetryError, sleep the number of
 seconds indicated by the error and try again. Meanwhile, inform the user of
 what's going on using 'send'.
 */
-func handleThrottling(do func() error, initialMsg string, send func(string)) error {
+func handleRetry(do func() error, initialMsg string, send func(string)) error {
 	for {
 		if len(initialMsg) > 0 {
 			send(initialMsg)
@@ -166,22 +165,20 @@ func handleThrottling(do func() error, initialMsg string, send func(string)) err
 		if err == nil {
 			return nil
 		} else {
-			var e *jsonapi.ThrottleError
+			var e *jsonapi.RetryError
 			if errors.As(err, &e) {
 				retryAfter := e.RetryAfter
 				if isatty.IsTerminal(os.Stdout.Fd()) {
 					for retryAfter > 0 {
-						send(fmt.Sprintf(
-							"Throttled, will retry after %d seconds",
-							retryAfter,
+						send(fmt.Sprint(
+							err,
 						))
 						time.Sleep(time.Second)
 						retryAfter -= 1
 					}
 				} else {
-					send(fmt.Sprintf(
-						"Throttled, will retry after %d seconds",
-						retryAfter,
+					send(fmt.Sprint(
+						err,
 					))
 					time.Sleep(time.Duration(retryAfter) * time.Second)
 				}
@@ -209,4 +206,25 @@ func isValidResolutionPolicy(policy string) (IsValid bool) {
 	}
 	return false
 
+}
+
+type getSizeFuncType func(fd int) (int, int, error)
+
+var getSizeFunc getSizeFuncType = term.GetSize
+
+func truncateMessage(message string) string {
+	width, _, err := getSizeFunc(int(os.Stdout.Fd()))
+	if err != nil {
+		width = 80
+	}
+
+	maxLength := width - 2
+	if maxLength < 0 {
+		maxLength = 0
+	}
+
+	if len(message) > maxLength && maxLength > 0 {
+		return message[:maxLength] + ".."
+	}
+	return message
 }

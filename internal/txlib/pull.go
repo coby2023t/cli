@@ -153,25 +153,40 @@ func (task *ResourcePullTask) Run(send func(string), abort func()) {
 		if args.Silent && !force {
 			return
 		}
-		send(fmt.Sprintf(
+
+		message := fmt.Sprintf(
 			"%s.%s - %s",
 			cfgResource.ProjectSlug,
 			cfgResource.ResourceSlug,
 			body,
-		))
+		)
+
+		if !args.Silent {
+			message = truncateMessage(message)
+		}
+
+		send(message)
 	}
 	sendMessage("Getting info", false)
 
-	localToRemoteLanguageMappings := makeLocalToRemoteLanguageMappings(
+	remoteToLocalLanguageMappings := makeRemoteToLocalLanguageMappings(
 		*cfg,
 		*cfgResource,
 	)
-	remoteToLocalLanguageMappings := makeRemoteToLocalLanguageMappings(
-		localToRemoteLanguageMappings,
-	)
+	localToRemoteLanguageMappings := reverseMap(remoteToLocalLanguageMappings)
 
 	var err error
-	resource, err := txapi.GetResourceById(api, cfgResource.GetAPv3Id())
+	var resource *jsonapi.Resource
+	err = handleRetry(
+		func() error {
+			var err error
+			resource, err = txapi.GetResourceById(api, cfgResource.GetAPv3Id())
+			return err
+		},
+		"Getting info",
+		func(msg string) { sendMessage(msg, false) },
+	)
+
 	if err != nil {
 		sendMessage(err.Error(), true)
 		if !args.Skip {
@@ -203,11 +218,19 @@ func (task *ResourcePullTask) Run(send func(string), abort func()) {
 	sourceLanguage := project.Relationships["source_language"].DataSingular
 
 	var stats map[string]*jsonapi.Resource
-	if args.Source && !args.Translations {
-		stats, err = txapi.GetResourceStats(api, resource, sourceLanguage)
-	} else {
-		stats, err = txapi.GetResourceStats(api, resource, nil)
-	}
+	err = handleRetry(
+		func() error {
+			if args.Source && !args.Translations {
+				stats, err = txapi.GetResourceStats(api, resource, sourceLanguage)
+			} else {
+				stats, err = txapi.GetResourceStats(api, resource, nil)
+			}
+			return err
+		},
+		"Get language stats",
+		func(msg string) { sendMessage(msg, false) },
+	)
+
 	if err != nil {
 		sendMessage(err.Error(), true)
 		if !args.Skip {
@@ -364,13 +387,20 @@ func (task *FilePullTask) Run(send func(string), abort func()) {
 		}
 
 		cyan := color.New(color.FgCyan).SprintFunc()
-		send(fmt.Sprintf(
+
+		message := fmt.Sprintf(
 			"%s.%s %s - %s",
 			cfgResource.ProjectSlug,
 			cfgResource.ResourceSlug,
 			cyan("["+code+"]"),
 			body,
-		))
+		)
+
+		if !args.Silent {
+			message = truncateMessage(message)
+		}
+
+		send(message)
 	}
 	sendMessage("Pulling file", false)
 
@@ -409,7 +439,7 @@ func (task *FilePullTask) Run(send func(string), abort func()) {
 		// Creating download job
 
 		var download *jsonapi.Resource
-		err = handleThrottling(
+		err = handleRetry(
 			func() error {
 				var err error
 				download, err = txapi.CreateResourceStringsAsyncDownload(
@@ -434,7 +464,7 @@ func (task *FilePullTask) Run(send func(string), abort func()) {
 
 		// Polling
 
-		err = handleThrottling(
+		err = handleRetry(
 			func() error {
 				return txapi.PollResourceStringsDownload(download, sourceFile)
 			},
@@ -513,7 +543,7 @@ func (task *FilePullTask) Run(send func(string), abort func()) {
 		// Creating download job
 
 		var download *jsonapi.Resource
-		err = handleThrottling(
+		err = handleRetry(
 			func() error {
 				var err error
 				if args.Pseudo {
@@ -549,7 +579,7 @@ func (task *FilePullTask) Run(send func(string), abort func()) {
 
 		// Polling
 
-		err = handleThrottling(
+		err = handleRetry(
 			func() error {
 				return txapi.PollTranslationDownload(download, filePath)
 			},

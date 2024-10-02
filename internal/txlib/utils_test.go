@@ -67,16 +67,35 @@ func TestFigureOutResources(t *testing.T) {
 	}
 }
 
-func TestConflictResolution(t *testing.T) {
-	ResultHead := isValidResolutionPolicy("USE_HEAD")
-	assert.Equal(t, ResultHead, true)
+func mockGetSize(fd int) (int, int, error) {
+	return 80, 0, nil
+}
 
-	ResultBase := isValidResolutionPolicy("USE_BASE")
-	assert.Equal(t, ResultBase, true)
+func TestTruncateMessage(t *testing.T) {
+	// Backup the original function
+	originalGetSizeFunc := getSizeFunc
+	defer func() { getSizeFunc = originalGetSizeFunc }()
 
-	WrongResult := isValidResolutionPolicy("WRONG_BASE")
-	if WrongResult == true {
-		t.Error("Should be error")
-	}
+	// Test with 80 character terminal width
+	getSizeFunc = mockGetSize
+	result := truncateMessage("short message")
+	assert.Equal(t, "short message", result)
 
+	result = truncateMessage(
+		"this is a long message that needs to be truncated because it exceeds the maximum length of 75 characters",
+	)
+	assert.Equal(
+		t,
+		"this is a long message that needs to be truncated because it exceeds the maxim..",
+		result,
+	)
+
+	result = truncateMessage(
+		"a message with exactly 75 characters - this message should not be truncated",
+	)
+	assert.Equal(
+		t,
+		"a message with exactly 75 characters - this message should not be truncated",
+		result,
+	)
 }
